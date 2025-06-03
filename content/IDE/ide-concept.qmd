@@ -1,0 +1,55 @@
+## IDE Concept
+
+::: {.callout-note appearance="simple" collapse="false"}
+I'd like to build a human-centered AI application for radiologist. The one that came into my mind is a specialized IDE for radiologist for writing a radiology report. What do you think?
+:::
+
+A specialized IDE for radiologists to write reports is an excellent idea with real practical value. Let me share some thoughts on how this could transform radiology workflows:
+
+**Core Value Proposition**
+
+The current report writing process is often fragmented - radiologists switch between PACS viewers, dictation software, and reporting systems. An integrated IDE could unify this workflow while adding AI-powered assistance tailored to radiological practice.
+
+**Key Features to Consider**
+
+1. **Smart Templates with Context Awareness**
+   - AI that suggests report structures based on imaging modality and clinical indication
+   - Dynamic templates that adapt to findings as you describe them
+   - Automatic population of technical parameters from DICOM metadata
+
+2. **Intelligent Autocomplete**
+   - Medical terminology suggestions specific to the body part and pathology
+   - Phrase completion based on your personal reporting style
+   - Measurement assistance (e.g., automatically suggesting comparison to prior studies)
+
+3. **Real-time Quality Checks**
+   - Flag potential inconsistencies or missing critical findings
+   - Ensure all relevant structures are addressed
+   - Check for laterality errors or contradictions
+
+4. **Visual Integration**
+   - Side-by-side image viewing with report editing
+   - Click-to-insert functionality for measurements and annotations
+   - Automatic screenshot capture for key findings
+
+5. **Evidence-Based Recommendations**
+   - Inline access to relevant guidelines (BI-RADS, LI-RADS, etc.)
+   - Differential diagnosis suggestions based on described findings
+   - Follow-up recommendations based on current standards
+
+**Technical Implementation Considerations**
+
+Given your background, you could start with:
+
+- **Backend**: Python FastAPI for the server, integrating with existing PACS/RIS systems via HL7/FHIR
+- **Frontend**: Web-based interface using React/TypeScript for flexibility
+- **AI Models**: Fine-tuned language models for radiology-specific text generation and NLP
+- **Database**: PostgreSQL for report storage with full-text search capabilities
+
+**Potential Challenges**
+
+- Integration with existing hospital systems (PACS, RIS, EMR)
+- Ensuring HIPAA compliance and data security
+- Gaining trust from radiologists who may be skeptical of AI assistance
+- Handling the variety of reporting styles and preferences
+

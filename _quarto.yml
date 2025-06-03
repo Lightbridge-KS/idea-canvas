@@ -1,0 +1,24 @@
+project:
+  type: book
+
+book:
+  title: "Ideas Canvas"
+  author: "Kittipos Sirivongrungson"
+  date: today
+  repo-url: https://github.com/Lightbridge-KS/idea-canvas
+  site-url: https://idea-canvas-lightbridge.netlify.app
+  chapters:
+    - index.qmd
+    - part: IDE
+      chapters: 
+        - "content/IDE/ide-concept.qmd"
+
+
+format:
+  html:
+    theme:
+      - cosmo
+      - brand
+
+
+

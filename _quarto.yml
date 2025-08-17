@@ -12,6 +12,9 @@ book:
     - part: IDE
       chapters: 
         - "content/IDE/ide-concept.qmd"
+    - part: Text Editor
+      chapters: 
+        - "content/TextEditor/editor-dev-guilde.md"
 
 
 format:

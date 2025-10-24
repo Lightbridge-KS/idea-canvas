@@ -16,6 +16,9 @@ book:
       chapters: 
         - "content/TextEditor/editor-dev-guilde.md"
         - "content/TextEditor/editor-radio-guide.md"
+    - part: CNN
+      chapters: 
+        - "content/DL/Deploy-CNN-Edge-US.qmd"
 
 
 format:

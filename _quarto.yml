@@ -19,6 +19,9 @@ book:
     - part: CNN
       chapters: 
         - "content/DL/Deploy-CNN-Edge-US.qmd"
+    - part: LLM
+      chapters: 
+        - "content/LLM/llm-enterprise-architect.qmd"
 
 
 format:

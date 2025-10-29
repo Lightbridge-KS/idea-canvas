@@ -1,0 +1,686 @@
+# Enterprise LLM Architecture 2025
+
+::: {.callout-tip appearance="default" collapse="false"}
+## About
+Enterprise LLM Architecture for Hospital Radiology: A Complete Implementation Guide
+:::
+
+
+Ramathibodi Hospital presents a well-defined technical challenge: deploying production-grade LLM applications on-premise for ~20 users with a polyglot stack (C#, Python, TypeScript), LDAP authentication, and HIPAA-grade security. This report synthesizes research across model serving, microservices architecture, security patterns, and healthcare compliance to deliver an actionable blueprint.
+
+## Executive summary: Three-tier polyglot architecture
+
+The recommended architecture leverages each language's strengths: **C# for enterprise integration and security**, **Python for ML inference**, and **TypeScript for modern UIs**. At this scale, Docker Compose provides the optimal balance of simplicity and functionality, avoiding Kubernetes' operational overhead. The core stack centers on vLLM for model serving (20x faster than Ollama for concurrent users), YARP as the ASP.NET Core API gateway, and Server-Sent Events for streaming responses.
+
+**Critical finding**: For 20 concurrent users with custom-trained models, a single NVIDIA A100 (40GB) or A6000 (48GB) GPU provides sufficient capacity. Hardware investment of $35-50K breaks even with cloud alternatives in 12-18 months while maintaining complete PHI sovereignty—a non-negotiable requirement for HIPAA compliance.
+
+## System architecture: Component breakdown and data flow
+
+### Three-tier architecture overview
+
+The system operates across three distinct layers, each optimized for its specific responsibilities:
+
+**Presentation Layer (TypeScript/React)**
+Modern web applications built with React 18+ and TypeScript provide the clinical user interface. This layer handles real-time streaming of LLM responses via Server-Sent Events, renders markdown-formatted outputs with sanitization (DOMPurify), and manages user sessions. Component libraries like assistant-ui or @llamaindex/chat-ui accelerate development with pre-built chat interfaces, message threading, and streaming text rendering. The frontend communicates exclusively with the C# API Gateway layer, never directly accessing backend services.
+
+**Integration Layer (C# ASP.NET Core 8)**
+This middle tier serves as the security boundary and orchestration hub. Built on ASP.NET Core 8, it provides LDAP/Active Directory authentication, JWT token generation and validation, audit logging for HIPAA compliance, rate limiting per user, and request routing to downstream services. YARP (Yet Another Reverse Proxy) handles reverse proxying to Python ML services with health checks, load balancing, and automatic failover. The gateway also implements middleware for request validation, PHI detection, and comprehensive audit trails capturing user identity, timestamps, actions, and IP addresses.
+
+**ML Inference Layer (Python/vLLM)**
+Python services handle all machine learning operations, leveraging vLLM for high-throughput model serving. This layer supports multiple model serving (base models, fine-tuned radiology models, LoRA adapters), streaming inference with Server-Sent Events, MLflow model registry for versioning and governance, and GPU resource management via PagedAttention. Services expose OpenAI-compatible REST APIs, simplifying integration with the C# gateway. For asynchronous processing (batch report generation, long-running analyses), RabbitMQ message queues decouple request submission from inference execution.
+
+### Authentication and security flow
+
+Authentication follows a centralized pattern with the C# API Gateway as the security perimeter. When a clinician logs in, the gateway validates credentials against Active Directory (IP: 10.6.22.15:389) using System.DirectoryServices.Protocols or Novell.Directory.Ldap.NETStandard. Upon successful authentication, the gateway generates a JWT token containing user claims (userId, roles, department) signed with a shared secret. This token is returned to the client and included in all subsequent requests as a Bearer token.
+
+The API Gateway validates JWT tokens on every request before proxying to downstream services. For Python services requiring user context, the gateway forwards the JWT in request headers. Python FastAPI services validate the same JWT using PyJWT, ensuring consistent security across the polyglot stack. All authentication events, both successful and failed, are logged to an immutable audit trail stored in a dedicated compliance database.
+
+Critical security controls include encryption in transit (TLS 1.3) for all network communication, encryption at rest (AES-256) for databases and model storage, network isolation (VLAN segmentation for AI services, no external internet access), and multi-factor authentication (MFA) for privileged users.
+
+### Service communication patterns
+
+**Synchronous REST Communication**
+For real-time inference requests requiring immediate responses, the C# gateway makes HTTP requests to Python FastAPI services. The gateway uses HttpClientFactory with connection pooling to maintain persistent connections and configured timeouts (30-60 seconds for LLM inference). Python services expose OpenAI-compatible endpoints for consistency with existing tools and libraries.
+
+**Server-Sent Events for Streaming**
+LLM token streaming uses Server-Sent Events, which outperform WebSockets for one-way communication. Python services yield tokens as they're generated, formatted as SSE messages. The C# gateway proxies these streams directly to the client browser, where EventSource API handlers update the UI in real-time. SSE provides automatic reconnection, firewall-friendly HTTP-based transport, and simpler debugging compared to WebSocket protocols.
+
+**Asynchronous Message Queues**
+RabbitMQ handles asynchronous workflows like batch processing of radiology reports or long-running model fine-tuning. The C# gateway publishes messages to queues (using RabbitMQ.Client), Python workers consume messages (using pika), and response queues notify the gateway when processing completes. This pattern decouples request submission from execution, improving user experience for time-consuming operations.
+
+### FHIR integration for radiology workflows
+
+Integration with hospital information systems follows FHIR standards for interoperability. The C# gateway implements FHIR client functionality to query patient demographics (Patient resource), retrieve imaging studies (ImagingStudy resource), access diagnostic reports (DiagnosticReport resource), and check clinical context (Condition, AllergyIntolerance, Procedure resources).
+
+When a radiologist opens a study in PACS, FHIRcast broadcasts the context change. The LLM application subscribes to these events and automatically loads relevant patient history via FHIR queries. This eliminates manual data entry and ensures the AI system has appropriate clinical context. All FHIR communications use OAuth 2.0 authentication with SMART on FHIR authorization, maintaining the same RBAC policies as other hospital systems.
+
+## Technology stack: Specific recommendations with versions
+
+### Core platform components
+
+**C# Integration Layer**
+ASP.NET Core 8.0 LTS forms the foundation, providing built-in rate limiting, improved performance (40% faster than Core 6), and native AOT compilation support. YARP 2.3+ handles reverse proxy functionality with dynamic configuration, health checks, and load balancing. System.DirectoryServices.Protocols or Novell.Directory.Ldap.NETStandard 3.6+ enables LDAP authentication. System.IdentityModel.Tokens.Jwt 7.0+ manages JWT creation and validation. RabbitMQ.Client 6.8+ provides message queue integration. Entity Framework Core 8.0 with PostgreSQL provider handles application data persistence. Audit.NET 25.0+ delivers comprehensive audit logging with immutable trails.
+
+**Python ML Layer**
+Python 3.11+ (LTS) offers 25% performance improvements over 3.9. vLLM 0.6.0+ serves as the primary model serving framework, delivering 20x higher throughput than Ollama for concurrent users. FastAPI 0.115+ provides high-performance async web framework with automatic OpenAPI documentation. MLflow 2.18+ manages model registry, versioning, and experiment tracking. PyJWT 2.9+ validates JWT tokens from the C# gateway. Pika 1.3+ handles RabbitMQ message consumption. Python-LDAP 3.4+ enables direct LDAP queries if needed. Prometheus-client 0.21+ exposes metrics for monitoring.
+
+**TypeScript Frontend**
+React 18.3+ with TypeScript 5.6+ forms the UI foundation. Assistant-ui 0.5+ or @llamaindex/chat-ui 0.3+ provides pre-built LLM chat components with streaming support. React Query 5.59+ manages server state and caching. Zustand 5.0+ handles client-side state management. Tailwind CSS 3.4+ enables rapid UI development with utility-first styling. Vite 6.0+ or Next.js 15+ provides build tooling and SSR capabilities. DOMPurify 3.2+ sanitizes LLM-generated HTML to prevent XSS attacks.
+
+**Infrastructure and Operations**
+Docker 27.0+ with Docker Compose 2.30+ orchestrates multi-container deployment. PostgreSQL 16.4 serves as the primary relational database for application data and audit logs. MongoDB 8.0 stores unstructured data (chat histories, document metadata). Redis 7.4 provides caching and session storage. RabbitMQ 4.0 handles message queuing with persistent queues and clustering support. Prometheus 3.0 collects metrics from all services. Grafana 11.3 visualizes metrics and creates operational dashboards. Langfuse (self-hosted) tracks LLM usage, costs, and performance.
+
+### Model serving comparison: vLLM vs alternatives
+
+Research definitively shows vLLM as the optimal choice for this deployment. Performance benchmarks reveal vLLM achieves 120-160 requests/second for 13B models on A100 GPUs, compared to 100-140 req/sec for TGI and just 1-3 req/sec for Ollama. Time-to-first-token averages 50-80ms for vLLM versus 200-400ms for Ollama. Most critically, vLLM handles 20+ concurrent users with linear scaling, while Ollama plateaus at 2-3 concurrent requests due to sequential processing.
+
+vLLM's PagedAttention algorithm optimizes GPU memory management, enabling larger batch sizes and higher throughput. Continuous batching dynamically processes requests as they arrive rather than waiting for batch assembly. Native multi-GPU support via tensor parallelism allows scaling to larger models if needed. OpenAI-compatible APIs simplify integration with existing tools. LoRA adapter support enables serving multiple model variants efficiently from a single base model.
+
+TGI (Text Generation Inference) from HuggingFace represents a strong alternative with 10-20% lower throughput than vLLM but superior built-in monitoring via Prometheus metrics. Choose TGI if enterprise observability is more critical than peak performance or if your workflow is tightly integrated with HuggingFace ecosystem.
+
+Ollama is explicitly not recommended for production use with 20 concurrent users. While excellent for development and prototyping, its sequential request processing cannot handle production load. Multiple sources characterize Ollama as "basically a toy for production workloads" due to throughput limitations. Use Ollama in development environments, then deploy to vLLM for production.
+
+### Container orchestration: Docker Compose vs Kubernetes
+
+For 20 users, Docker Compose provides the optimal balance of functionality and operational simplicity. Kubernetes introduces substantial overhead—complex YAML manifests, cluster management, networking policies, and specialized expertise—that provides minimal benefit at this scale. Docker Compose delivers multi-container orchestration, service dependencies and startup order, networking between services with DNS resolution, volume management for persistent data, resource limits (CPU, memory, GPU allocation), and health checks with automatic restarts.
+
+Kubernetes becomes advantageous at 100+ concurrent users, multi-datacenter deployments, or when sophisticated features like automatic pod scaling, rolling updates with zero downtime, complex network policies, and service mesh integration become requirements. The cognitive overhead and operational complexity of Kubernetes are not justified for departmental deployments.
+
+A practical migration path preserves investment: develop using Docker Compose initially, then migrate to Kubernetes if scale demands it. Docker images built for Compose transfer directly to Kubernetes with minimal modification. This approach minimizes upfront complexity while retaining future scalability options.
+
+## Implementation roadmap: Phased deployment strategy
+
+### Phase 1: Infrastructure setup and core services (Weeks 1-4)
+
+Begin with hardware procurement and configuration. Install Ubuntu Server 22.04 LTS (or Windows Server 2022 if organizational requirements mandate) on GPU-enabled servers. Configure NVIDIA drivers (version 535+), CUDA toolkit 12.2+, and Docker with NVIDIA Container Toolkit for GPU passthrough. Establish network segmentation by creating an isolated VLAN for AI services, configuring firewall rules to restrict external access, and setting up VPN access for remote administration.
+
+Deploy foundational services via Docker Compose: PostgreSQL for application data and audit logs, MongoDB for unstructured storage, Redis for caching, RabbitMQ for message queuing, and Prometheus/Grafana for monitoring. Configure automated backups with encryption, disaster recovery procedures, and health monitoring dashboards.
+
+### Phase 2: Authentication and API gateway (Weeks 5-8)
+
+Develop the ASP.NET Core 8 API Gateway with YARP reverse proxy configuration, LDAP authentication integration using System.DirectoryServices or Novell.Directory.Ldap, JWT token generation with HS256 signing, middleware for audit logging (capturing user, timestamp, action, IP address), rate limiting using built-in ASP.NET Core 8 middleware (100 requests/minute per user baseline), and CORS policies for frontend access.
+
+Implement comprehensive integration testing including LDAP connectivity verification, JWT generation and validation flows, rate limiting enforcement, audit log integrity verification, and health check endpoints. Document API specifications using Swagger/OpenAPI and provide examples for common operations.
+
+### Phase 3: Python ML inference layer (Weeks 9-12)
+
+Deploy vLLM model serving infrastructure with Docker containerization, GPU resource allocation (1x A100 or A6000 initially), and model loading from MLflow registry. Create FastAPI service wrappers providing OpenAI-compatible endpoints, JWT token validation middleware, structured logging, Prometheus metrics export, and error handling with appropriate HTTP status codes.
+
+Set up MLflow model registry for version control, deployment tracking, model metadata (training data, performance metrics), and approval workflows. Integrate with RabbitMQ for asynchronous processing, implementing workers that consume batch job messages, execute long-running inferences, and publish results to response queues.
+
+### Phase 4: Frontend development and FHIR integration (Weeks 13-16)
+
+Build the TypeScript/React frontend using assistant-ui or @llamaindex/chat-ui for rapid development. Implement EventSource API handlers for SSE streaming, markdown rendering with DOMPurify sanitization, message threading and conversation history, user authentication flows, and loading states with progress indicators. Design admin dashboards showing model usage metrics, cost tracking per user, performance statistics (latency, throughput), and error rates.
+
+Integrate FHIR client functionality to query patient demographics and clinical history, subscribe to FHIRcast context changes, and display relevant patient data alongside LLM interactions. Implement appropriate consent management and minimum necessary data access controls.
+
+### Phase 5: Security hardening and compliance validation (Weeks 17-20)
+
+Conduct comprehensive security assessments including penetration testing by third-party security firm, vulnerability scanning with automated tools, PHI leakage detection tests, and RBAC policy validation. Implement additional security controls like secrets management (HashiCorp Vault or Azure Key Vault), log encryption and tamper-proofing, intrusion detection rules, and security incident response procedures.
+
+Complete HIPAA compliance documentation with risk assessment and management plan, business associate agreements with any vendors, policies and procedures for AI system usage, training materials for clinical staff, and audit logging verification reports. Conduct tabletop exercises simulating security incidents, data breaches, and system failures to validate response procedures.
+
+### Phase 6: User acceptance testing and deployment (Weeks 21-24)
+
+Execute pilot deployment with 5-10 early adopter clinicians, collecting feedback on UI/UX, model accuracy and clinical utility, performance and latency, and integration with existing workflows. Iterate based on feedback, refining prompts, adjusting model parameters, improving UI responsiveness, and optimizing performance.
+
+Conduct comprehensive training for all users covering system capabilities and limitations, prompt engineering best practices, PHI handling requirements, error reporting procedures, and escalation paths for clinical concerns. Roll out to full department (20 users) with continuous monitoring, regular check-ins with users, performance optimization, and ongoing model improvement.
+
+## Security and compliance: HIPAA implementation details
+
+### LDAP/Active Directory authentication patterns
+
+ASP.NET Core 8 authentication integrates with Active Directory using multiple approaches. The recommended pattern uses custom authentication middleware that validates credentials against LDAP, generates JWT tokens on successful authentication, and handles token refresh logic. The Novell.Directory.Ldap.NETStandard library provides cross-platform LDAP support without Windows-specific dependencies.
+
+Implementation involves creating an LDAP service that connects to Active Directory at 10.6.22.15:389, binds using service account credentials, searches for the user by username, and attempts authentication with provided credentials. On successful authentication, the service extracts user claims (groups, department, email) and returns user information. The authentication controller then generates a JWT token containing these claims, sets token expiration (typically 8 hours), and returns the token to the client. All subsequent requests include this JWT as a Bearer token, which ASP.NET Core middleware validates on every request.
+
+For Python services requiring authentication, the C# gateway forwards the validated JWT in request headers. Python FastAPI services use PyJWT to decode and validate the token using the shared secret, extract user claims, and enforce authorization policies. This pattern maintains centralized authentication (only C# gateway talks to LDAP) while distributing authorization decisions across services.
+
+### Audit logging and monitoring requirements
+
+HIPAA requires comprehensive audit trails capturing who accessed what data when and from where. The recommended implementation uses Audit.NET, a mature framework with healthcare-specific patterns. Configure Audit.NET to log every API request capturing user identity (from JWT claims), timestamp with millisecond precision, HTTP method and path, request and response bodies (with PHI redacted if configured), IP address and user agent, operation outcome (success/failure), and processing duration.
+
+Store audit logs in a separate PostgreSQL database with write-once-read-many (WORM) characteristics implemented via database permissions. Only the application service account can insert records; human users have read-only access. Implement log integrity verification using cryptographic hashing of log entries, periodic integrity checks, and alerts on any detected tampering.
+
+Configure real-time monitoring with tiered alerts: critical alerts for potential HIPAA violations (unauthorized PHI access, bulk data exports, failed authentication attempts exceeding thresholds) sent via SMS/email immediately; medium-priority issues (performance degradation, elevated error rates, unusual usage patterns) summarized in daily reports; low-priority events (routine operations, successful logins, normal API calls) logged for periodic review.
+
+### PHI handling in LLM pipelines
+
+Protected Health Information must never leave on-premise infrastructure or appear in unencrypted form. Implement a multi-layered approach to PHI protection starting with input validation and sanitization. Before sending prompts to LLM services, detect and redact direct identifiers (names, medical record numbers, dates, addresses) using regex patterns combined with NER models. Replace identifiers with placeholder tokens maintaining context (Patient A, Date 1) for clinically meaningful responses.
+
+For model fine-tuning, use only de-identified datasets following HIPAA Safe Harbor or Expert Determination methods. Store training data separately from production data with additional access controls. When LLM outputs are generated, validate them for PHI leakage using the same detection mechanisms applied to inputs. Screen for unintended disclosure via model hallucination, context clues that could enable re-identification, and implicit identifiers.
+
+Implement the Minimum Necessary Standard by limiting data access to what each service genuinely requires. Use attribute-based access control (ABAC) for granular PHI governance. Store all LLM inputs and outputs with the same encryption and access controls as source medical records. Maintain complete lineage tracking showing which data was used to generate each response.
+
+### HL7 and FHIR integration patterns
+
+Modern radiology workflows benefit from FHIR integration for seamless clinical context. Implement FHIR client functionality in the C# gateway to query key resources. For patient demographics, query Patient resources by identifier (MRN) to retrieve basic information. For imaging context, query ImagingStudy resources to link DICOM studies to FHIR records. For clinical decision support, query Condition resources for active diagnoses, AllergyIntolerance for contrast allergies (critical for radiology protocols), Procedure for surgical history, and DiagnosticReport for recent lab results.
+
+Implement FHIRcast subscription to maintain synchronized context across applications. When radiologists open imaging studies in PACS, the PACS system publishes ImagingStudy-open events to a FHIRcast hub. Your LLM application subscribes to the hub, receives context change events, and automatically loads relevant patient data via FHIR queries. This pattern eliminates manual data entry and ensures consistent context across systems.
+
+Secure all FHIR communications using OAuth 2.0 authentication with SMART on FHIR authorization scopes. Apply the same RBAC policies to FHIR access as other PHI systems. Cache frequently accessed FHIR resources with appropriate TTLs to reduce latency, but implement cache invalidation on patient data updates. Monitor FHIR API performance and error rates as part of overall system observability.
+
+## Code examples and architectural references
+
+### YARP reverse proxy configuration
+
+The API Gateway uses YARP to proxy requests to Python ML services with health checks and load balancing:
+
+```json
+{
+  "ReverseProxy": {
+    "Routes": {
+      "llm-inference": {
+        "ClusterId": "vllm-cluster",
+        "Match": { "Path": "/api/llm/{**catch-all}" },
+        "Transforms": [
+          { "PathPattern": "/{**catch-all}" },
+          { "RequestHeader": "X-User-Id", "Set": "{claims.userId}" }
+        ]
+      }
+    },
+    "Clusters": {
+      "vllm-cluster": {
+        "LoadBalancingPolicy": "RoundRobin",
+        "Destinations": {
+          "vllm-primary": { 
+            "Address": "http://vllm-service-1:8000/" 
+          },
+          "vllm-backup": { 
+            "Address": "http://vllm-service-2:8000/" 
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:10",
+            "Timeout": "00:00:05",
+            "Path": "/health"
+          },
+          "Passive": {
+            "Enabled": true,
+            "ReactivationPeriod": "00:01:00"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+This configuration routes requests to `/api/llm/*` to the vLLM cluster, which includes two instances for redundancy. Active health checks poll the `/health` endpoint every 10 seconds, while passive health monitoring detects failures and removes unhealthy instances from rotation.
+
+### LDAP authentication in ASP.NET Core
+
+Implement LDAP authentication using Novell.Directory.Ldap.NETStandard for cross-platform compatibility:
+
+```csharp
+public class LdapAuthenticationService
+{
+    private readonly string _ldapServer = "10.6.22.15";
+    private readonly int _ldapPort = 389;
+    private readonly string _baseDn = "DC=ramathibodi,DC=local";
+
+    public async Task<UserInfo> AuthenticateAsync(string username, string password)
+    {
+        using var connection = new LdapConnection();
+        
+        try
+        {
+            // Connect to LDAP server
+            await connection.ConnectAsync(_ldapServer, _ldapPort);
+            
+            // Bind with user credentials
+            var userDn = $"CN={username},{_baseDn}";
+            await connection.BindAsync(userDn, password);
+            
+            // Search for user attributes
+            var searchFilter = $"(sAMAccountName={username})";
+            var searchResults = await connection.SearchAsync(
+                _baseDn, 
+                LdapConnection.ScopeSub, 
+                searchFilter,
+                new[] { "cn", "mail", "memberOf", "department" }
+            );
+            
+            var entry = searchResults.Next();
+            return new UserInfo
+            {
+                Username = username,
+                Email = entry.GetAttribute("mail")?.StringValue,
+                Department = entry.GetAttribute("department")?.StringValue,
+                Groups = entry.GetAttribute("memberOf")?.StringValueArray
+            };
+        }
+        catch (LdapException ex)
+        {
+            throw new AuthenticationException("LDAP authentication failed", ex);
+        }
+    }
+}
+```
+
+After successful authentication, generate a JWT token containing user claims that downstream services can validate:
+
+```csharp
+public string GenerateJwtToken(UserInfo user)
+{
+    var claims = new[]
+    {
+        new Claim(JwtRegisteredClaimNames.Sub, user.Username),
+        new Claim(JwtRegisteredClaimNames.Email, user.Email),
+        new Claim("department", user.Department),
+        new Claim("groups", JsonSerializer.Serialize(user.Groups))
+    };
+    
+    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSecret));
+    var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+    
+    var token = new JwtSecurityToken(
+        issuer: "ramathibodi-api-gateway",
+        audience: "ramathibodi-services",
+        claims: claims,
+        expires: DateTime.UtcNow.AddHours(8),
+        signingCredentials: credentials
+    );
+    
+    return new JwtSecurityTokenHandler().WriteToken(token);
+}
+```
+
+### Python FastAPI service with JWT validation
+
+Python services validate JWT tokens forwarded from the C# gateway:
+
+```python
+from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi.responses import StreamingResponse
+import jwt
+from typing import Optional
+import asyncio
+
+app = FastAPI()
+
+JWT_SECRET = os.getenv("JWT_SECRET")
+JWT_ALGORITHM = "HS256"
+
+async def verify_token(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    
+    token = authorization.replace("Bearer ", "")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+async def stream_llm_response(prompt: str, model_name: str):
+    """Stream tokens from vLLM as Server-Sent Events"""
+    sampling_params = SamplingParams(
+        temperature=0.7,
+        max_tokens=512,
+        stream=True
+    )
+    
+    async for output in llm.generate(prompt, sampling_params):
+        token = output.outputs[0].text
+        yield f"data: {token}\n\n"
+        await asyncio.sleep(0)  # Allow other tasks to run
+    
+    yield "data: [DONE]\n\n"
+
+@app.post("/v1/chat/completions")
+async def chat_completion(
+    request: ChatRequest,
+    user: dict = Depends(verify_token)
+):
+    # Audit log the request
+    await log_audit_event(
+        user_id=user.get("sub"),
+        action="llm_inference",
+        model=request.model,
+        timestamp=datetime.utcnow()
+    )
+    
+    if request.stream:
+        return StreamingResponse(
+            stream_llm_response(request.prompt, request.model),
+            media_type="text/event-stream"
+        )
+    else:
+        result = await llm.complete(request.prompt)
+        return {"text": result, "model": request.model}
+```
+
+### Docker Compose deployment configuration
+
+A complete Docker Compose configuration orchestrates all services:
+
+```yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: radiologyai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - backend
+
+  api-gateway:
+    build: ./csharp-gateway
+    ports:
+      - "443:443"
+    environment:
+      LDAP_SERVER: "10.6.22.15"
+      LDAP_PORT: 389
+      JWT_SECRET: ${JWT_SECRET}
+      ConnectionStrings__DefaultConnection: ${DB_CONNECTION}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - backend
+      - frontend
+
+  vllm-service:
+    build: ./python-ml
+    runtime: nvidia
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      MODEL_NAME: ${MODEL_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - model_cache:/root/.cache/huggingface
+      - mlflow_artifacts:/mlflow
+    networks:
+      - backend
+
+  frontend:
+    build: ./typescript-ui
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: https://api-gateway
+    depends_on:
+      - api-gateway
+    networks:
+      - frontend
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-dashboards:/etc/grafana/provisioning/dashboards
+    ports:
+      - "3001:3000"
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  model_cache:
+  mlflow_artifacts:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  frontend:
+  backend:
+```
+
+### Frontend streaming implementation
+
+React components handle Server-Sent Events for real-time token streaming:
+
+```typescript
+import { useState, useEffect, useRef } from 'react';
+
+interface UseLLMStreamOptions {
+  url: string;
+  prompt: string;
+  onComplete?: () => void;
+  onError?: (error: Error) => void;
+}
+
+export function useLLMStream({ url, prompt, onComplete, onError }: UseLLMStreamOptions) {
+  const [content, setContent] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const bufferRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (!prompt) return;
+
+    setIsStreaming(true);
+    setContent('');
+    
+    const token = localStorage.getItem('auth_token');
+    const eventSource = new EventSource(
+      `${url}?prompt=${encodeURIComponent(prompt)}`,
+      { 
+        headers: { Authorization: `Bearer ${token}` } 
+      }
+    );
+    
+    eventSourceRef.current = eventSource;
+
+    // Buffer tokens for smooth rendering (50ms batches)
+    const flushInterval = setInterval(() => {
+      if (bufferRef.current.length > 0) {
+        setContent(prev => prev + bufferRef.current.join(''));
+        bufferRef.current = [];
+      }
+    }, 50);
+
+    eventSource.onmessage = (event) => {
+      if (event.data === '[DONE]') {
+        eventSource.close();
+        setIsStreaming(false);
+        clearInterval(flushInterval);
+        onComplete?.();
+      } else {
+        bufferRef.current.push(event.data);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('SSE error:', error);
+      eventSource.close();
+      setIsStreaming(false);
+      clearInterval(flushInterval);
+      onError?.(new Error('Stream connection failed'));
+    };
+
+    return () => {
+      eventSource.close();
+      clearInterval(flushInterval);
+    };
+  }, [url, prompt, onComplete, onError]);
+
+  const cancel = () => {
+    eventSourceRef.current?.close();
+    setIsStreaming(false);
+  };
+
+  return { content, isStreaming, cancel };
+}
+
+// Usage in component
+function ChatInterface() {
+  const [prompt, setPrompt] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  
+  const { content, isStreaming, cancel } = useLLMStream({
+    url: '/api/llm/stream',
+    prompt: prompt,
+    onComplete: () => {
+      setMessages(prev => [...prev, { role: 'assistant', content }]);
+    }
+  });
+
+  return (
+    <div className="chat-container">
+      <MessageList messages={messages} />
+      {isStreaming && (
+        <StreamingMessage content={content} onCancel={cancel} />
+      )}
+      <InputBox 
+        onSubmit={setPrompt} 
+        disabled={isStreaming} 
+      />
+    </div>
+  );
+}
+```
+
+### Open-source reference projects
+
+Several mature open-source projects demonstrate similar polyglot architectures:
+
+**eShopOnContainers** (Microsoft) provides comprehensive microservices reference architecture with ASP.NET Core gateway, polyglot services (C#, Node.js), RabbitMQ message queuing, and Docker Compose deployment. The project demonstrates BFF (Backend for Frontend) patterns, authentication with IdentityServer, and observability with Application Insights. Available at github.com/dotnet-architecture/eShopOnContainers.
+
+**HuggingChat UI** offers production-ready LLM chat interface built with SvelteKit, TypeScript, and MongoDB. It includes OpenAI-compatible backend integration, conversation history management, and markdown rendering with syntax highlighting. The codebase provides excellent examples of streaming chat UIs and can be adapted for React. Available at github.com/huggingface/chat-ui.
+
+**Assistant-ui** is the most popular React component library for LLM interfaces with 50,000+ monthly downloads. It provides composable primitives for chat interfaces, streaming response rendering, and integration with AI SDK, LangGraph, and Mastra. The library handles complex state management and optimistic updates automatically. Available at github.com/assistant-ui/assistant-ui.
+
+**Blazor Server JWT Identity LDAP Sample** demonstrates ASP.NET Core authentication with both Identity and LDAP, JWT token generation including refresh tokens, role-based and policy-based authorization, and Entity Framework Core integration. While focused on Blazor, the authentication patterns transfer directly to API scenarios. Available at github.com/miladashrafi/Blazor-Server-JWT-Identity-LDAP-Sample.
+
+## Hardware requirements and infrastructure sizing
+
+### GPU and server specifications
+
+For 20 concurrent users with custom-trained 7-13B parameter models, the recommended hardware configuration includes a single NVIDIA A100 (40GB VRAM) or A6000 (48GB VRAM) GPU. The A100 provides superior compute performance (312 TFLOPS FP16) ideal for high-throughput inference, while the A6000 offers larger VRAM (48GB vs 40GB) beneficial for multiple concurrent model loading. Either GPU handles 20 concurrent users comfortably with vLLM's continuous batching.
+
+Server specifications should include 32+ CPU cores (Intel Xeon or AMD EPYC) for request handling and preprocessing, 256GB system RAM for model loading and operating system overhead, 4TB NVMe SSD storage (2TB for models and datasets, 2TB for logs and databases), and dual 10Gbps Ethernet NICs for redundancy. This configuration supports current requirements with room for growth to 40-50 users before requiring a second GPU.
+
+For larger models (30B+ parameters) or higher user counts, implement tensor parallelism across 2-4 GPUs. Configure vLLM with `--tensor-parallel-size 2` to split model weights across multiple GPUs, enabling inference on models that exceed single-GPU memory capacity while improving throughput.
+
+### Infrastructure cost analysis
+
+Initial hardware investment totals $35,000-50,000 including 2x NVIDIA A100 GPUs ($20,000-30,000), server hardware with CPU, RAM, storage ($10,000-15,000), and networking equipment including switches and cables ($5,000). Software costs are minimal with all open-source components (vLLM, ASP.NET Core, PostgreSQL, RabbitMQ) requiring zero licensing fees. Optional commercial support contracts for critical components may add $0-5,000 annually.
+
+Ongoing operational costs include power consumption at approximately $3,000-5,000 annually for 2x A100 GPUs (400W each) running 24/7, cooling requirements adding $1,000-2,000 annually, and IT staff time for maintenance and monitoring. Total annual operational costs approximate $4,000-7,000.
+
+Compare this to cloud-based alternatives where AWS/Azure GPU instances cost $3-5 per hour for comparable performance. For 24/7 operation, annual cloud costs reach $26,000-44,000 per year. The on-premise deployment breaks even in 12-18 months while maintaining complete data sovereignty—a requirement for HIPAA compliance. Additionally, on-premise deployment eliminates network latency to cloud regions, provides consistent performance without throttling, and avoids egress charges for large datasets.
+
+### Monitoring and observability architecture
+
+Comprehensive monitoring uses Prometheus for metrics collection, Grafana for visualization, and Langfuse for LLM-specific observability. Configure Prometheus to scrape metrics from all services every 15 seconds, capturing request rates and latency percentiles (p50, p95, p99), error rates and types, GPU utilization and memory, database connection pool stats, and queue depths and message processing rates.
+
+Grafana dashboards visualize system health with separate views for operations (infrastructure health, service availability, resource utilization), developers (API response times, error rates by endpoint, deployment status), and business (LLM usage by user and model, cost tracking based on token consumption, user satisfaction metrics). Configure alerts for critical conditions including API error rate exceeding 1%, GPU memory utilization above 90%, database connection pool exhaustion, and queue message age exceeding 5 minutes.
+
+Langfuse provides LLM-specific observability by tracking prompt and completion tokens for cost analysis, latency metrics (time to first token, total generation time), user feedback and ratings, and cost per request broken down by model and user. Self-host Langfuse to maintain HIPAA compliance with all observability data remaining on-premise.
+
+## Practical considerations for small-scale deployment
+
+### Development workflow and CI/CD
+
+Establish efficient development workflows using Git for version control with feature branch workflow, separate repositories for C# gateway, Python services, and TypeScript frontend, or monorepo approach using tools like Nx. Implement automated CI/CD pipelines in GitHub Actions, GitLab CI, or Azure DevOps with stages for build (Docker image creation with layer caching), test (unit tests, integration tests, security scans), and deploy (push to internal registry, deploy to staging, promote to production).
+
+Use Docker Compose for local development environments enabling developers to run the entire stack locally, switch between model versions easily, and debug with hot-reload capabilities. Provide `.env.example` files documenting all required environment variables and setup scripts that initialize databases, load sample data, and configure services.
+
+### Performance optimization strategies
+
+Optimize performance through multiple techniques. Implement caching at multiple layers using Redis for session data and frequently accessed records, in-memory caching in C# services for configuration and reference data, and CDN caching for static frontend assets. Configure connection pooling for all database connections, HTTP clients, and message queue connections to avoid connection establishment overhead on each request.
+
+For vLLM, tune inference parameters including `gpu_memory_utilization=0.85` to leave headroom for operating system, `max_num_seqs` based on observed concurrency patterns (start with 32), and `max_model_len` based on typical prompt and response lengths. Monitor performance metrics and adjust based on actual usage patterns, scaling resources before hitting capacity limits.
+
+Implement request batching for non-realtime operations, combining multiple smaller requests into single batch inference calls when latency requirements permit. This significantly improves GPU utilization and overall throughput for batch processing scenarios like overnight report generation.
+
+### Disaster recovery and business continuity
+
+Establish robust backup and recovery procedures with automated daily backups of PostgreSQL databases, MongoDB collections, and model artifacts to encrypted storage. Implement point-in-time recovery capability with transaction log shipping, enabling restoration to any point within the retention window. Store backups both on-site (for rapid recovery) and off-site (for disaster scenarios) with regular restore testing to verify backup integrity.
+
+Document disaster recovery procedures including recovery time objectives (RTO) and recovery point objectives (RPO) for each service tier, step-by-step recovery procedures with assigned responsibilities, and communication plans for notifying stakeholders during incidents. Conduct quarterly disaster recovery drills, simulating various failure scenarios (hardware failure, data corruption, ransomware attack) to validate procedures and identify gaps.
+
+For high availability, implement service redundancy by running multiple instances of stateless services (API gateway, vLLM inference) with load balancing, database replication with hot standbys, and message queue clustering. However, for 20 users, single instances with rapid recovery procedures may provide adequate availability while minimizing operational complexity.
+
+## Healthcare-specific implementation guidance
+
+### Clinical workflow integration
+
+Successful LLM deployment requires deep integration with existing radiology workflows. Design the system to enhance rather than disrupt established practices. Integrate with PACS workstations through context synchronization via FHIRcast, allowing the LLM application to automatically load relevant patient history when radiologists open imaging studies. Provide voice-activated controls for hands-free operation in reading rooms. Support multiple monitor configurations common in radiology, displaying AI suggestions alongside DICOM images.
+
+Implement clinical decision support features including protocol recommendations based on clinical indications and patient history, differential diagnosis suggestions based on imaging findings, and comparison with prior studies highlighting interval changes. Always present these as suggestions requiring radiologist review rather than autonomous decisions, maintaining the human expert at the center of clinical decision-making.
+
+### Model fine-tuning for radiology domain
+
+Generic LLMs require fine-tuning on radiology-specific data to provide clinically useful outputs. Collect de-identified radiology reports, imaging protocols, and clinical notes from your institutional archive. Ensure rigorous de-identification following HIPAA Safe Harbor method, removing all 18 identifier categories and contextual clues. Partner with experienced radiologists to review de-identified data, ensuring clinical accuracy and appropriateness.
+
+Fine-tune base models using parameter-efficient techniques like LoRA (Low-Rank Adaptation) requiring only 1-2% of full fine-tuning compute while achieving comparable results. This enables rapid experimentation with different hyperparameters and training data compositions. Use MLflow to track all experiments, documenting training data versions, hyperparameters, performance metrics, and clinical evaluation results.
+
+Validate fine-tuned models through rigorous testing including quantitative metrics (BLEU scores, ROUGE scores for text generation), qualitative evaluation by radiologists assessing clinical accuracy, usefulness, and appropriateness, and comparison against baseline models and human performance. Never deploy models without thorough clinical validation and approval from the medical staff.
+
+### User training and change management
+
+Technology alone does not ensure successful adoption—comprehensive user training and change management are critical. Develop role-specific training programs for radiologists covering system capabilities and limitations, effective prompt engineering for clinical scenarios, interpreting AI suggestions appropriately, and reporting errors or concerns. For IT administrators, provide training on system monitoring and maintenance, troubleshooting common issues, security best practices, and escalation procedures.
+
+Implement a phased rollout strategy starting with 5-10 early adopters providing feedback and identifying workflow issues, followed by expansion to the full department after incorporating lessons learned. Assign clinical champions who advocate for the system, provide peer support, and serve as liaisons between users and technical teams. Collect continuous feedback through regular surveys, usage analytics, and in-person check-ins, iterating on both technical implementation and training materials.
+
+Set realistic expectations about AI capabilities and limitations. Emphasize that LLMs are tools to augment rather than replace radiologist expertise. Discuss known limitations including potential for hallucination or fabricated information, inability to access real-time imaging data without explicit integration, and need for human oversight on all clinical outputs. This transparency builds trust and appropriate reliance on AI assistance.
+
+### Regulatory compliance and documentation
+
+Maintain comprehensive documentation for regulatory compliance and operational excellence. Create and maintain detailed system documentation including architecture diagrams, data flow diagrams, network topology, and component specifications. Document all software versions, dependencies, and configuration settings for reproducibility. Maintain standard operating procedures for system operation, backup and recovery, incident response, and change management.
+
+Develop AI governance policies specific to LLM deployment covering intended use cases and prohibited uses, approval processes for new models or capabilities, model validation and performance monitoring requirements, and incident reporting and investigation procedures. Establish an AI governance committee with representation from radiology, IT, compliance, legal, and administration to oversee AI deployments and review policies regularly.
+
+Maintain audit-ready compliance documentation including HIPAA risk assessments updated annually, business associate agreements with any third-party vendors, policies and procedures for PHI handling in AI systems, training records for all users, and audit log reports demonstrating appropriate access controls. Prepare for regulatory inspections by maintaining organized documentation and conducting internal compliance audits quarterly.
+
+## Conclusion and next steps
+
+This comprehensive architecture provides a production-ready blueprint for deploying LLM applications in healthcare radiology departments. The three-tier polyglot design leverages the strengths of each technology: C# for enterprise security and integration, Python for ML inference, and TypeScript for modern user interfaces. At 20-user scale, Docker Compose orchestration provides optimal simplicity while vLLM delivers production-grade performance with 20x throughput advantages over alternatives like Ollama.
+
+The $35-50K initial hardware investment breaks even with cloud alternatives in 12-18 months while maintaining complete HIPAA compliance through on-premise deployment. Critical success factors include rigorous security implementation with LDAP authentication, comprehensive audit logging, and PHI protection; FHIR integration for seamless clinical workflow embedding; continuous monitoring via Prometheus, Grafana, and Langfuse; and thorough user training with realistic expectations about AI capabilities.
+
+Begin implementation by procuring GPU-enabled hardware and establishing foundational infrastructure, then progress through phased deployment building the C# API gateway with LDAP authentication, Python ML services with vLLM model serving, TypeScript frontend with streaming chat interfaces, and FHIR integration for clinical context. Validate security and compliance throughout with penetration testing, HIPAA audit preparation, and clinical validation of model outputs.
+
+The polyglot microservices architecture provides flexibility to evolve individual components independently as requirements change. The investment in open-source technologies avoids vendor lock-in while leveraging mature, battle-tested frameworks. Most importantly, this architecture maintains human clinicians at the center of decision-making, using AI as an augmentation tool rather than replacement—the foundation for responsible AI deployment in healthcare.

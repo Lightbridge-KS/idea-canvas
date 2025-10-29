@@ -6,7 +6,10 @@ Enterprise LLM Architecture for Hospital Radiology: A Complete Implementation Gu
 :::
 
 
-Ramathibodi Hospital presents a well-defined technical challenge: deploying production-grade LLM applications on-premise for ~20 users with a polyglot stack (C#, Python, TypeScript), LDAP authentication, and HIPAA-grade security. This report synthesizes research across model serving, microservices architecture, security patterns, and healthcare compliance to deliver an actionable blueprint.
+- [LLM Deploy Pattern](https://medium.com/@uri.meirav/llm-deployment-patterns-157e7c90e3fb)
+
+
+Deploying production-grade LLM applications on-premise for ~20 users with a polyglot stack (C#, Python, TypeScript), LDAP authentication, and HIPAA-grade security. This report synthesizes research across model serving, microservices architecture, security patterns, and healthcare compliance to deliver an actionable blueprint.
 
 ## Executive summary: Three-tier polyglot architecture
 

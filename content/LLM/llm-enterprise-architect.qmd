@@ -11,6 +11,143 @@ Enterprise LLM Architecture for Hospital Radiology: A Complete Implementation Gu
 
 Deploying production-grade LLM applications on-premise for ~20 users with a polyglot stack (C#, Python, TypeScript), LDAP authentication, and HIPAA-grade security. This report synthesizes research across model serving, microservices architecture, security patterns, and healthcare compliance to deliver an actionable blueprint.
 
+::: {.callout-note appearance="default" collapse="true"}
+### System Architecture 
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                         PRESENTATION LAYER                                      │
+│                                                                                                 │
+│  ┌─────────────────┐     ┌──────────────────┐     ┌────────────────┐     ┌──────────────────┐   │
+│  │  React 18+ UI   │     │ TypeScript App   │     │  DOMPurify     │     │  PACS Workstation│   │
+│  │  - Chat UI      │────▶│  - SSE Handler   │────▶│  Sanitization  │────▶│   Integration    │   │
+│  │  - Streaming    │     │  - JWT Storage   │     │                │     │                  │   │
+│  └─────────────────┘     └──────────────────┘     └────────────────┘     └──────────────────┘   │
+│                                    │                                                ▲           │
+└────────────────────────────────────┼────────────────────────────────────────────────┼───────────┘
+                                     │ HTTPS/TLS 1.3                                  │
+                                     ▼                                                │ FHIRcast
+┌─────────────────────────────────────────────────────────────────────────────────────┼────────────┐
+│                                    INTEGRATION LAYER (C# / ASP.NET Core 8)          │            │
+│                                                                                     ▼            │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                             API GATEWAY (YARP Reverse Proxy)                               │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐   │  │
+│  │  │ LDAP/AD Auth │  │ JWT Token    │  │ Rate Limiting│  │ Audit Logging│  │PHI Detection│   │  │
+│  │  │ 10.6.22.15   │──│ Generation   │──│  Per User    │──│   (HIPAA)    │──│   Filter    │   │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘  └─────────────┘   │  │
+│  │                                                                                            │  │
+│  │  ┌──────────────────────────────────────────────────────────────────────────────────────┐  │  │
+│  │  │                         Request Router & Load Balancer                               │  │  │
+│  │  │    - Health Checks     - Automatic Failover     - Connection Pooling                 │  │  │
+│  │  └──────────────────────────────────────────────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│           │                    │                    │                    │                       │
+│           ▼                    ▼                    ▼                    ▼                       │
+│  ┌───────────────┐    ┌───────────────┐    ┌──────────────┐    ┌──────────────┐                  │
+│  │ FHIR Client   │    │ RabbitMQ      │    │ Redis Cache  │    │ PostgreSQL   │                  │
+│  │ - Patient     │    │ Message Queue │    │ Session Store│    │ Audit DB     │                  │
+│  │ - ImagingStudy│    │               │    │              │    │              │                  │
+│  └───────────────┘    └───────────────┘    └──────────────┘    └──────────────┘                  │
+│           │                    │                                         │                       │
+└───────────┼────────────────────┼─────────────────────────────────────────┼───────────────────────┘
+            │                    │                                         │
+            ▼                    ▼                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    ML INFERENCE LAYER (Python)                                  │
+│                                                                                                 │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                               vLLM Model Serving Engine                                    │ │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────────┐     │ │
+│  │  │ Base LLM Models │  │ Fine-tuned      │  │ LoRA Adapters   │  │ PagedAttention     │     │ │
+│  │  │ - Llama 3 8B    │──│ Radiology Models│──│ Domain-specific │──│ GPU Management     │     │ │
+│  │  │ - Mistral 7B    │  │                 │  │                 │  │ NVIDIA A100/A6000  │     │ │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────┘  └────────────────────┘     │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                 │
+│  ┌──────────────────┐  ┌────────────────────────┐  ┌───────────────────┐  ┌─────────────────┐   │
+│  │ FastAPI Services │  │ OpenAI-Compatible API  │  │ Streaming SSE     │  │ Async Workers   │   │
+│  │ - /v1/completions│──│ - Standard Endpoints   │──│ Token Generation  │──│ - Batch Process │   │
+│  │ - /v1/embeddings │  │ - JWT Validation       │  │                   │  │ - Fine-tuning   │   │
+│  └──────────────────┘  └────────────────────────┘  └───────────────────┘  └─────────────────┘   │
+│           │                                                                          │          │
+│           ▼                                                                          ▼          │
+│  ┌──────────────────┐                                                      ┌─────────────────┐  │
+│  │ MLflow Registry  │                                                      │ MongoDB         │  │
+│  │ - Model Versions │                                                      │ - Model Metadata│  │
+│  │ - Governance     │                                                      │ - Embeddings    │  │
+│  └──────────────────┘                                                      └─────────────────┘  │
+│                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    MONITORING & OBSERVABILITY                                   │
+│                                                                                                 │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────────┐        │
+│  │  Prometheus      │──│  Grafana         │  │  Langfuse        │  │  Loki + Promtail  │        │
+│  │  - Metrics       │  │  - Dashboards    │──│  - LLM Traces    │──│  - Log Aggregation│        │
+│  │  - Alerts        │  │  - Visualization │  │  - Performance   │  │  - Analysis       │        │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘  └───────────────────┘        │
+│                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      DEPLOYMENT & ORCHESTRATION                                 │
+│                                                                                                 │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              Docker Compose Orchestration                                  │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                    │ │
+│  │  │ Service      │  │ Volume Mounts│  │ Network      │  │ Environment  │                    │ │
+│  │  │ Definitions  │  │ - Models     │  │ Isolation    │  │ Variables    │                    │ │
+│  │  │              │  │ - Logs       │  │ - VLANs      │  │ - Secrets    │                    │ │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘                    │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+DATA FLOW PATTERNS:
+═══════════════════
+
+1. Synchronous Request Flow (Real-time Inference):
+   User → React UI → C# Gateway → Python FastAPI → vLLM → Response
+
+2. Streaming Response Flow (SSE):
+   vLLM Token Generation ──SSE──▶ Python Service ──SSE──▶ C# Gateway ──SSE──▶ Browser EventSource
+
+3. Asynchronous Processing Flow:
+   User → C# Gateway → RabbitMQ → Python Worker → Processing → Callback Queue → Notification
+
+4. FHIR Context Synchronization:
+   PACS → FHIRcast Event → C# Gateway → FHIR Query → Patient Context → LLM Request
+
+
+SECURITY BOUNDARIES:
+═══════════════════
+
+┌─────────────────────────────────────────────────────────────────┐
+│  DMZ: User-facing services (React UI, C# Gateway)               │
+├─────────────────────────────────────────────────────────────────┤
+│  Internal Zone: ML Services (Python/vLLM, databases)            │
+├─────────────────────────────────────────────────────────────────┤
+│  Restricted Zone: PHI Storage, Audit Logs, Model Registry       │
+└─────────────────────────────────────────────────────────────────┘
+
+KEY SPECIFICATIONS:
+═════════════════
+
+- Hardware: NVIDIA A100 (40GB) or A6000 (48GB) GPU
+- Concurrency: 20 users with <2s latency target
+- Model Size: 7B-13B parameters (quantized to int8/int4)
+- Authentication: LDAP/Active Directory with JWT tokens
+- Compliance: HIPAA-compliant with full audit trails
+- Deployment: Docker Compose (avoiding Kubernetes complexity)
+- Monitoring: Prometheus + Grafana + Langfuse for LLM-specific metrics
+```
+:::
+
 ## Executive summary: Three-tier polyglot architecture
 
 The recommended architecture leverages each language's strengths: **C# for enterprise integration and security**, **Python for ML inference**, and **TypeScript for modern UIs**. At this scale, Docker Compose provides the optimal balance of simplicity and functionality, avoiding Kubernetes' operational overhead. The core stack centers on vLLM for model serving (20x faster than Ollama for concurrent users), YARP as the ASP.NET Core API gateway, and Server-Sent Events for streaming responses.

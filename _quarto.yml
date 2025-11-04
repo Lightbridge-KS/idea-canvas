@@ -22,6 +22,9 @@ book:
     - part: LLM
       chapters: 
         - "content/LLM/llm-enterprise-architect.qmd"
+    - part: Radio Platform
+      chapters: 
+        - "content/RadioPlatform/radiology_assist_platform.qmd"
 
 
 format:

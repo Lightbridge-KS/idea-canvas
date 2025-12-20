@@ -25,6 +25,10 @@ book:
     - part: Radio Platform
       chapters: 
         - "content/RadioPlatform/radiology_assist_platform.qmd"
+    - part: DICOM OpenQR
+      chapters: 
+        - text: Architecture
+          href: "content/DICOM-QR/dicom-qr-app.qmd"
 
 
 format:

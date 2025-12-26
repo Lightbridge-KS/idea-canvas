@@ -31,6 +31,8 @@ book:
           href: "content/DICOM-QR/dicom-qr-app.qmd"
         - text: DicomOpenQR (PRD)
           href: "content/DICOM-QR/DicomOpenQR-PRD.qmd"
+        - text: DicomOpenQR (Short PRD)
+          href: "content/DICOM-QR/DicomOpenQR-PRD-Short.qmd"
         - text: DicomOpenQR (Architecture)
           href: "content/DICOM-QR/DicomOpenQR-Architecture.qmd"
 

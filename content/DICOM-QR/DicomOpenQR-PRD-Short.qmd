@@ -1,0 +1,195 @@
+# DicomOpenQR — PRD
+
+This is a modern .NET MAUI Blazor Hybrid Desktop application for querying and batch export DICOM images from a PACS server with built-in anonymization. It is designed for radiology **research** workflows where patient data must be de-identified before analysis according to Thailand PDPA. 
+
+## Project Info
+
+- Project Name: DicomOpenQR
+- Target Platform: Desktop (macOS, Windows)
+- Tech Stack: .NET 9, MAUI Blazor Hybrid, fo-dicom, MudBlazor
+- Architecture: Follow .NET Clean architecture guideline
+- DICOM Networking Protocol: DIMSE-C services (C-ECHO, C-FIND,  C-GET)
+
+## Solution Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DicomOpenQR Solution                                │
+│                            (.NET 9 / C# 13)                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌───────────────────────────────────────────────────────────────────┐     │
+│   │                      DicomOpenQR.App                              │     │
+│   │                    (MAUI Blazor Hybrid)                           │     │
+│   │                                                                   │     │
+│   │  • Razor Components (UI)                                          │     │
+│   │  • MudBlazor Components                                           │     │
+│   │  • Platform-specific code (if needed)                             │     │
+│   │  • Dependency Injection setup                                     │     │
+│   └───────────────────────────┬───────────────────────────────────────┘     │
+│                               │ references                                  │
+│                               ▼                                             │
+│   ┌───────────────────────────────────────────────────────────────────┐     │
+│   │                      DicomOpenQR.Core                             │     │
+│   │                       (Class Library)                             │     │
+│   │                                                                   │     │
+│   │  • Domain Models                                                  │     │
+│   │  • Service Interfaces & Implementations                           │     │
+│   │  • DICOM Operations (fo-dicom)                                    │     │
+│   │  • Excel Parsing                                                  │     │
+│   │  • Anonymization Logic                                            │     │
+│   └───────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Input & Output
+
+### Input Mapping Excel
+
+**User Story:**
+> As a researcher, I want to upload an Excel file with Accession Numbers so that I can batch-query multiple studies.
+
+**Expected Columns**
+
+| Column | Name        | Description                                    | Required |
+|--------|-------------|------------------------------------------------|----------|
+| 1      | `AN`        | Accession Number                               | Yes*     |
+
+**Example Excel Input**
+
+| NO  | AN         | DATE       | EXAM       | SERIES         |
+|-----|------------|------------|------------|----------------|
+| 001 | ACC001     | 15/12/2025 | Chest X-Ray|                |
+| 002 | ACC002     | 16/12/2025 | CT Chest   | Lung;Mediastinum |
+
+### Feature: PACS Query (C-FIND)
+
+**Description:** Query PACS for each Accession Number to retrieve study metadata.
+
+**User Story:**
+> As a researcher, I want to query the PACS for each Accession Number so that I can see which studies exist and their details.
+
+**Acceptance Criteria:**
+
+- [ ] For each AN, send a C-FIND request at Study level
+- [ ] Retrieve: Study Instance UID, Patient ID, Patient Name, Modality, Study Date, Study Description
+- [ ] Display results in a table with status (Found / Not Found / Error)
+- [ ] Show progress indicator during query
+- [ ] Allow cancellation of query operation
+- [ ] Handle timeouts gracefully (configurable timeout, default 30s)
+
+**C-FIND Query Tags:**
+
+| Tag | Keyword | Action |
+|-----|---------|--------|
+| (0008,0050) | AccessionNumber | Match (input) |
+| (0020,000D) | StudyInstanceUID | Return |
+| (0010,0020) | PatientID | Return |
+| (0010,0010) | PatientName | Return |
+| (0008,0060) | Modality | Return |
+| (0008,0020) | StudyDate | Return |
+| (0008,1030) | StudyDescription | Return |
+
+
+### Feature: DICOM Retrieve (C-GET + SCP)
+
+**Description:** Download DICOM images from PACS using C-GET. The app runs a local SCP to receive the images.
+
+**User Story:**
+> As a researcher, I want to download the DICOM images for selected studies so that I can use them for my research.
+
+**Acceptance Criteria:**
+
+- [ ] User selects which studies to download (checkbox selection)
+- [ ] App starts a local DICOM SCP (C-STORE) to receive images
+- [ ] App sends C-GET request to PACS for each selected study
+- [ ] Progress shown per study (images received / total if known)
+- [ ] Overall progress shown for all studies
+- [ ] Allow cancellation
+- [ ] Handle association errors gracefully
+
+
+### Feature: Anonymization
+
+- Support the Anomymization with mapping table (`patient_mapping.csv`) that can link back to original `HN` or `AN`
+
+- Removing or replacing PHI tags.
+
+**User Story:**
+> As a researcher, I want patient data to be anonymized so that I comply with privacy regulations (HIPAA, GDPR).
+
+
+**Acceptance Criteria:**
+
+- [ ] Generate a unique anonymous ID for each original Patient ID
+- [ ] Generate a unique anonymous Accession Number for each original AN
+- [ ] Replace PHI tags according to DICOM PS3.15 Annex E (Basic Profile)
+- [ ] Maintain consistency: same original Patient ID → same anonymous ID
+- [ ] Preserve non-PHI tags (image data, technical parameters)
+- [ ] Anonymization happens during C-STORE receive (before saving)
+
+**Tags to Anonymize (Minimum Set):**
+
+| Tag | Keyword | Action |
+|-----|---------|--------|
+| (0010,0010) | PatientName | Replace with anonymous |
+| (0010,0020) | PatientID | Replace with anonymous |
+| (0010,0030) | PatientBirthDate | Remove or replace with empty |
+| (0010,0040) | PatientSex | Keep or remove (configurable) |
+| (0008,0050) | AccessionNumber | Replace with anonymous |
+| (0008,0080) | InstitutionName | Remove |
+| (0008,0081) | InstitutionAddress | Remove |
+| (0008,0090) | ReferringPhysicianName | Remove |
+| (0008,1050) | PerformingPhysicianName | Remove |
+| (0010,1000) | OtherPatientIDs | Remove |
+| (0010,1001) | OtherPatientNames | Remove |
+| (0010,2160) | EthnicGroup | Remove |
+| (0010,21B0) | AdditionalPatientHistory | Remove |
+
+
+**User Story:**
+> As a researcher, I want the anonymized files saved to a folder with a mapping file so that I can trace back to original records if needed (securely stored).
+
+### Output
+
+#### Mapping CSV (`patient_mapping.csv`)
+
+The export generates a CSV file that maps original patient data to anonymized identifiers.
+
+**CSV Columns**
+
+| Column                | Description                                         |
+|-----------------------|-----------------------------------------------------|
+| `No.`                 | Row number                                          |
+| `HN`                  | Original Hospital Number                            |
+| `HN_Anonymous`        | Anonymized patient ID (based on AnonyMode)          |
+| `AN`                  | Original Accession Number                           |
+| `Accession_Anonymous` | Anonymized accession (based on AnonyMode)         |
+| `Name`                | Patient Name (from PACS)                            |
+| `Date_of_Birth`       | Patient DOB (`DD/MM/YYYY`)                          |
+| `Gender`              | Patient sex (M/F)                                   |
+| `StudyDate`           | Date of study (`DD/MM/YYYY`)                        |
+| `Exam`                | Study description + procedure ID                    |
+| `Modality`            | Comma-separated modalities (e.g., "CR, DX")         |
+| `Series_Count`        | Number of series in study                           |
+| `Instance_Count`      | Total DICOM instances from PACS                     |
+
+#### Download Zip files
+
+The output that user downloaded will be a zip file containing multiple files and folder structures as follows:
+
+```
+~/Downloads/
+├── patient_mapping.csv
+└── DICOM/
+    ├── ANON001/
+    │   ├── 1/                    # Series 1
+    │   │   ├── IMG00001.dcm
+    │   │   └── IMG00002.dcm
+    │   └── 2/                    # Series 2
+    │       └── IMG00001.dcm
+    └── ANON002/
+        └── 1/
+            └── IMG00001.dcm
+```

@@ -1,0 +1,729 @@
+---
+title: "DicomOpenQR - Product Requirements Document (PRD)"
+---
+
+## Project Info
+
+- Project Name: DicomOpenQR
+- Target Platform: Desktop (macOS, Windows)
+- Tech Stack: .NET 9, MAUI Blazor Hybrid, fo-dicom, MudBlazor
+- Architecture: Follow .NET Clean architecture guideline
+
+## Executive Summary
+
+**DicomOpenQR** is a desktop application for querying and extracting DICOM images from a PACS (Picture Archiving and Communication System) server with built-in anonymization. It is designed for radiology research workflows where patient data must be de-identified before analysis.
+
+## Workflow Overview
+
+A radiologist or researcher uploads an Excel or CSV file containing Accession Numbers (AN), the app queries the PACS, downloads matching studies, anonymizes patient information, and exports the data with a mapping file.
+
+```
+┌──────────────────┐     ┌──────────────────┐     ┌─────────────────┐     ┌──────────────┐
+│ Excel / CSV File │────►│ Query PACS       │────►│ Download DICOM  │────►│ Export +     │
+│ (AN)             │     │ (C-FIND/C-GET)   │     │ + Anonymize     │     │ CSV Mapping  │
+└──────────────────┘     └──────────────────┘     └─────────────────┘     └──────────────┘
+```
+
+1. **User uploads Excel file** containing Accession Numbers (AN)
+2. **App queries PACS** using DICOM C-FIND to find matching studies
+3. **App retrieves images** using DICOM C-GET with optional anonymization
+4. **App exports locally** with a `patient_mapping.csv` mapping file
+
+
+---
+
+## 2. Goals and Non-Goals
+
+### Goals
+
+- Query PACS server using DICOM DIMSE protocol (C-FIND)
+- Retrieve DICOM studies using C-GET
+- Anonymize DICOM files by removing/replacing PHI (Protected Health Information)
+- Generate a mapping CSV file linking original AN to anonymized AN
+- Provide a simple, wizard-like setup for PACS configuration
+- Package as an offline-capable desktop installer
+
+### Non-Goals
+
+- DICOM viewing/rendering capabilities
+- Integration with hospital EMR/RIS systems
+- Real-time streaming or continuous sync with PACS
+- Support for DICOM Web (DICOMweb/WADO) - DIMSE only
+
+---
+
+## 3. Target Users
+
+| User Type | Description |
+|-----------|-------------|
+| **Primary** | Radiologists conducting research studies |
+| **Secondary** | Research assistants collecting imaging data |
+| **Technical** | IT staff who configure PACS connectivity |
+
+### User Environment
+
+- Hospital network (offline/air-gapped environments common)
+- macOS or Windows workstations
+- Access to institutional PACS server
+- Basic computer literacy (not developers)
+
+---
+
+## 4. Technical Architecture
+
+### 4.1 Solution Structure
+
+```
+DicomOpenQR/
+├── DicomOpenQR.sln
+├── src/
+│   ├── DicomOpenQR.Core/           # Class Library (.NET 9)
+│   │   ├── Domain/                 # Entities, Value Objects, Enums
+│   │   ├── Application/            # Interfaces, DTOs, Use Cases
+│   │   └── Infrastructure/         # fo-dicom, ClosedXML implementations
+│   │
+│   └── DicomOpenQR.App/            # MAUI Blazor Hybrid App
+│       ├── Components/             # Razor components (Pages, Layout, Shared)
+│       ├── Services/               # UI state management
+│       └── wwwroot/                # Static assets
+│
+└── tests/
+    └── DicomOpenQR.Core.Tests/     # xUnit tests
+```
+
+### 4.2 Technology Stack
+
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| UI Framework | MAUI Blazor Hybrid | Cross-platform desktop app with web UI |
+| UI Components | MudBlazor | Material Design components for Blazor |
+| DICOM Library | fo-dicom (v5.x) | DIMSE operations (C-FIND, C-GET) |
+| Excel Parsing | ClosedXML | Read .xlsx files |
+| CSV Export | CsvHelper | Generate patient mapping CSV |
+| Logging | Microsoft.Extensions.Logging | Structured logging |
+| DI Container | Microsoft.Extensions.DependencyInjection | Built into MAUI |
+
+### 4.3 Clean Architecture Layers
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                      Presentation                            │
+│                  (DicomOpenQR.App)                           │
+│         Razor Components, MudBlazor, State Services          │
+└─────────────────────────────┬────────────────────────────────┘
+                              │ depends on
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                      Application                             │
+│              (DicomOpenQR.Core/Application)                  │
+│          Interfaces, DTOs, Use Cases, Events                 │
+└─────────────────────────────┬────────────────────────────────┘
+                              │ depends on
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                        Domain                                │
+│                (DicomOpenQR.Core/Domain)                     │
+│           Entities, Value Objects, Enums                     │
+│              (No external dependencies)                      │
+└──────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ implements
+┌──────────────────────────────────────────────────────────────┐
+│                     Infrastructure                           │
+│            (DicomOpenQR.Core/Infrastructure)                 │
+│       fo-dicom services, ClosedXML, File System              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Feature Requirements
+
+### 5.1 Feature: PACS Configuration (Settings Page)
+
+**Priority:** P0 (Must Have)
+
+**Description:** Users must configure PACS connection settings before using the app. Settings should persist between sessions.
+
+**User Story:**
+> As a user, I want to configure my PACS server connection so that the app can communicate with my hospital's imaging archive.
+
+**Acceptance Criteria:**
+
+- [ ] User can input: PACS Host (IP/hostname), PACS Port, PACS AE Title
+- [ ] User can input: Local AE Title, Local Port (for SCP)
+- [ ] User can test connection with a C-ECHO request
+- [ ] Settings are saved to local storage (JSON file)
+- [ ] Settings persist after app restart
+- [ ] Validation errors shown for invalid inputs
+
+**UI Elements:**
+
+- Text fields for each configuration parameter
+- "Test Connection" button with success/failure feedback
+- "Save" button
+
+**Default Values for Development (Orthanc):**
+
+```json
+{
+  "Pacs": {
+    "Host": "127.0.0.1",
+    "Port": 4242,
+    "AeTitle": "ORTHANC"
+  },
+  "Local": {
+    "AeTitle": "DICOM_OPEN_QR",
+    "Port": 11112
+  }
+}
+```
+
+---
+
+### 5.2 Feature: Excel / CSV Import
+
+**Priority:** P0 (Must Have)
+
+**Description:** Users upload an Excel file containing Accession Numbers to query.
+
+**User Story:**
+> As a researcher, I want to upload an Excel file with Accession Numbers so that I can batch-query multiple studies.
+
+**Acceptance Criteria:**
+
+- [ ] User can drag-and-drop or browse to select an Excel or CSV file (.xlsx, .xls, .csv)
+- [ ] App reads the column named "AN" (case-insensitive) 
+- [ ] Preview table shows the first 10 rows
+- [ ] Duplicate ANs are detected and highlighted
+- [ ] Empty rows are ignored
+- [ ] Error shown if file is invalid or column not found
+
+**Data Validation:**
+
+- Accession Number: Non-empty string, trimmed of whitespace
+- Skip rows where AN is empty or whitespace-only
+
+#### Input Schema: Excel / CSV File
+
+Expected Columns
+
+| Column | Name        | Description                                    | Required |
+|--------|-------------|------------------------------------------------|----------|
+| 0      | `NO`        | Row number/ID                                  | Optional |
+| 2      | `AN`        | Accession Number                               | Yes*     |
+| 3      | `DATE`      | Study date (format: `DD/MM/YYYY`)              | Optional |
+
+
+### Example Excel Input
+
+| NO  | ACCESSION  | DATE       | EXAM       | SERIES         |
+|-----|------------|------------|------------|----------------|
+| 001 | ACC001     | 15/12/2025 | Chest X-Ray|                |
+| 002 | ACC002     | 16/12/2025 | CT Chest   | Lung;Mediastinum |
+
+---
+
+### 5.3 Feature: PACS Query (C-FIND)
+
+**Priority:** P0 (Must Have)
+
+**Description:** Query PACS for each Accession Number to retrieve study metadata.
+
+**User Story:**
+> As a researcher, I want to query the PACS for each Accession Number so that I can see which studies exist and their details.
+
+**Acceptance Criteria:**
+
+- [ ] For each AN, send a C-FIND request at Study level
+- [ ] Retrieve: Study Instance UID, Patient ID, Patient Name, Modality, Study Date, Study Description
+- [ ] Display results in a table with status (Found / Not Found / Error)
+- [ ] Show progress indicator during query
+- [ ] Allow cancellation of query operation
+- [ ] Handle timeouts gracefully (configurable timeout, default 30s)
+
+**C-FIND Query Tags:**
+
+| Tag | Keyword | Action |
+|-----|---------|--------|
+| (0008,0050) | AccessionNumber | Match (input) |
+| (0020,000D) | StudyInstanceUID | Return |
+| (0010,0020) | PatientID | Return |
+| (0010,0010) | PatientName | Return |
+| (0008,0060) | Modality | Return |
+| (0008,0020) | StudyDate | Return |
+| (0008,1030) | StudyDescription | Return |
+
+---
+
+### 5.4 Feature: DICOM Retrieve (C-GET + SCP)
+
+**Priority:** P0 (Must Have)
+
+**Description:** Download DICOM images from PACS using C-GET. The app runs a local SCP to receive the images.
+
+**User Story:**
+> As a researcher, I want to download the DICOM images for selected studies so that I can use them for my research.
+
+**Acceptance Criteria:**
+
+- [ ] User selects which studies to download (checkbox selection)
+- [ ] App starts a local DICOM SCP (C-STORE) to receive images
+- [ ] App sends C-GET request to PACS for each selected study
+- [ ] Progress shown per study (images received / total if known)
+- [ ] Overall progress shown for all studies
+- [ ] Allow cancellation
+- [ ] Handle association errors gracefully
+
+### 5.5 Feature: Anonymization
+
+**Priority:** P0 (Must Have)
+
+**Description:** Anonymize DICOM files by removing or replacing PHI tags.
+
+**User Story:**
+> As a researcher, I want patient data to be anonymized so that I comply with privacy regulations (HIPAA, GDPR).
+
+**Acceptance Criteria:**
+
+- [ ] Generate a unique anonymous ID for each original Patient ID
+- [ ] Generate a unique anonymous Accession Number for each original AN
+- [ ] Replace PHI tags according to DICOM PS3.15 Annex E (Basic Profile)
+- [ ] Maintain consistency: same original Patient ID → same anonymous ID
+- [ ] Preserve non-PHI tags (image data, technical parameters)
+- [ ] Anonymization happens during C-STORE receive (before saving)
+
+**Tags to Anonymize (Minimum Set):**
+
+| Tag | Keyword | Action |
+|-----|---------|--------|
+| (0010,0010) | PatientName | Replace with anonymous |
+| (0010,0020) | PatientID | Replace with anonymous |
+| (0010,0030) | PatientBirthDate | Remove or replace with empty |
+| (0010,0040) | PatientSex | Keep or remove (configurable) |
+| (0008,0050) | AccessionNumber | Replace with anonymous |
+| (0008,0080) | InstitutionName | Remove |
+| (0008,0081) | InstitutionAddress | Remove |
+| (0008,0090) | ReferringPhysicianName | Remove |
+| (0008,1050) | PerformingPhysicianName | Remove |
+| (0010,1000) | OtherPatientIDs | Remove |
+| (0010,1001) | OtherPatientNames | Remove |
+| (0010,2160) | EthnicGroup | Remove |
+| (0010,21B0) | AdditionalPatientHistory | Remove |
+
+---
+
+### 5.6 Feature: File Export
+
+**Priority:** P0 (Must Have)
+
+**Description:** Save anonymized DICOM files and generate a mapping CSV.
+
+**User Story:**
+> As a researcher, I want the anonymized files saved to a folder with a mapping file so that I can trace back to original records if needed (securely stored).
+
+
+## Output Schema: `patient_mapping.csv`
+
+The export generates a CSV file that maps original patient data to anonymized identifiers.
+
+### CSV Columns
+
+| Column                | Description                                         |
+|-----------------------|-----------------------------------------------------|
+| `No.`                 | Row number                                          |
+| `HN`                  | Original Hospital Number                            |
+| `HN_Anonymous`        | Anonymized patient ID (based on AnonyMode)          |
+| `AN`                  | Original Accession Number                           |
+| `Accession_Anonymous` | Anonymized accession (based on AnonyMode)         |
+| `Name`                | Patient Name (from PACS)                            |
+| `Date_of_Birth`       | Patient DOB (`DD/MM/YYYY`)                          |
+| `Gender`              | Patient sex (M/F)                                   |
+| `StudyDate`           | Date of study (`DD/MM/YYYY`)                        |
+| `Exam`                | Study description + procedure ID                    |
+| `Modality`            | Comma-separated modalities (e.g., "CR, DX")         |
+| `Series_Count`        | Number of series in study                           |
+| `Instance_Count`      | Total DICOM instances from PACS                     |
+
+
+**Acceptance Criteria:**
+
+- [ ] User selects output directory
+- [ ] DICOM files saved in folder structure: `{OutputDir}/{AnonAN}/` or `{OutputDir}/{AnonAN}/{SeriesNumber}/`
+- [ ] Generate `patient_mapping.csv`. 
+- [ ] CSV uses UTF-8 encoding with BOM for Excel compatibility
+- [ ] Show summary after export (studies exported, images saved, any errors)
+
+**Folder Structure Example:**
+
+```
+/Users/researcher/DicomOutput/
+├── patient_mapping.csv
+└── DICOM/
+    ├── ANON001/
+    │   ├── 1/                    # Series 1
+    │   │   ├── IMG00001.dcm
+    │   │   └── IMG00002.dcm
+    │   └── 2/                    # Series 2
+    │       └── IMG00001.dcm
+    └── ANON002/
+        └── 1/
+            └── IMG00001.dcm
+```
+
+---
+
+### 5.7 Feature: Connection Status Indicator
+
+**Priority:** P1 (Should Have)
+
+**Description:** Visual indicator showing PACS connectivity status.
+
+**User Story:**
+> As a user, I want to see if I'm connected to PACS so that I know the app is ready to use.
+
+**Acceptance Criteria:**
+
+- [ ] Status indicator in the app footer/header
+- [ ] States: Connected (green), Disconnected (red), Unknown (gray)
+- [ ] Periodic connectivity check (every 60 seconds) using C-ECHO
+- [ ] Manual refresh button
+
+---
+
+## 6. Domain Models
+
+### 6.1 Entities
+
+```csharp
+// Domain/Entities/StudyRecord.cs
+public class StudyRecord
+{
+    public string AccessionNumber { get; set; } = string.Empty;
+    public string StudyInstanceUid { get; set; } = string.Empty;
+    public string PatientId { get; set; } = string.Empty;
+    public string PatientName { get; set; } = string.Empty;
+    public string Modality { get; set; } = string.Empty;
+    public DateTime? StudyDate { get; set; }
+    public string StudyDescription { get; set; } = string.Empty;
+    public QueryStatus QueryStatus { get; set; } = QueryStatus.Pending;
+    public ProcessingStatus ProcessingStatus { get; set; } = ProcessingStatus.None;
+    public int ImageCount { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+// Domain/Entities/PatientMapping.cs
+public class PatientMapping
+{
+    public string OriginalAccessionNumber { get; set; } = string.Empty;
+    public string AnonymizedAccessionNumber { get; set; } = string.Empty;
+    public string OriginalPatientId { get; set; } = string.Empty;
+    public string AnonymizedPatientId { get; set; } = string.Empty;
+    public string Modality { get; set; } = string.Empty;
+    public DateTime? StudyDate { get; set; }
+    public string StudyDescription { get; set; } = string.Empty;
+    public int ImageCount { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+```
+
+### 6.2 Enums
+
+```csharp
+// Domain/Enums/QueryStatus.cs
+public enum QueryStatus
+{
+    Pending,
+    Querying,
+    Found,
+    NotFound,
+    Error
+}
+
+// Domain/Enums/ProcessingStatus.cs
+public enum ProcessingStatus
+{
+    None,
+    Queued,
+    Downloading,
+    Anonymizing,
+    Completed,
+    Failed
+}
+```
+
+### 6.3 Value Objects
+
+```csharp
+// Domain/ValueObjects/DicomEndpoint.cs
+public record DicomEndpoint(
+    string Host,
+    int Port,
+    string AeTitle
+);
+
+// Domain/ValueObjects/LocalScpConfig.cs
+public record LocalScpConfig(
+    string AeTitle,
+    int Port
+);
+```
+
+---
+
+## 7. Application Interfaces
+
+```csharp
+// Application/Interfaces/IDicomQueryService.cs
+public interface IDicomQueryService
+{
+    Task<StudyRecord?> QueryByAccessionNumberAsync(
+        string accessionNumber,
+        CancellationToken ct = default);
+    
+    Task<bool> TestConnectionAsync(CancellationToken ct = default);
+}
+
+// Application/Interfaces/IDicomRetrieveService.cs
+public interface IDicomRetrieveService
+{
+    Task<RetrieveResult> RetrieveStudyAsync(
+        string studyInstanceUid,
+        string destinationAeTitle,
+        IProgress<RetrieveProgress>? progress = null,
+        CancellationToken ct = default);
+}
+
+// Application/Interfaces/IDicomScpService.cs
+public interface IDicomScpService
+{
+    Task StartAsync(int port, string aeTitle, CancellationToken ct = default);
+    Task StopAsync();
+    bool IsRunning { get; }
+    event EventHandler<DicomInstanceReceivedEventArgs>? InstanceReceived;
+}
+
+// Application/Interfaces/IAnonymizationService.cs
+public interface IAnonymizationService
+{
+    Task<AnonymizationResult> AnonymizeAsync(
+        DicomFile dicomFile,
+        PatientMapping mapping,
+        CancellationToken ct = default);
+    
+    string GenerateAnonymousId(string prefix = "ANON");
+}
+
+// Application/Interfaces/IExcelReaderService.cs
+public interface IExcelReaderService
+{
+    Task<IReadOnlyList<string>> ReadAccessionNumbersAsync(
+        Stream fileStream,
+        string columnName = "AN",
+        CancellationToken ct = default);
+    
+    Task<IReadOnlyList<string>> GetColumnNamesAsync(
+        Stream fileStream,
+        CancellationToken ct = default);
+}
+
+// Application/Interfaces/IExportService.cs
+public interface IExportService
+{
+    Task ExportMappingCsvAsync(
+        IEnumerable<PatientMapping> mappings,
+        string outputPath,
+        CancellationToken ct = default);
+    
+    Task SaveDicomFileAsync(
+        DicomFile file,
+        string basePath,
+        string anonymizedAccessionNumber,
+        CancellationToken ct = default);
+}
+
+// Application/Interfaces/IConfigurationService.cs
+public interface IConfigurationService
+{
+    Task<AppConfiguration> LoadAsync();
+    Task SaveAsync(AppConfiguration config);
+    string ConfigurationFilePath { get; }
+}
+```
+
+---
+
+## 8. UI Pages and Components
+
+### 8.1 Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| Home | `/` | Dashboard with quick stats and recent activity |
+| Query | `/query` | Excel upload, query execution, results table |
+| Settings | `/settings` | PACS configuration |
+
+### 8.2 Shared Components
+
+| Component | Description |
+|-----------|-------------|
+| `MainLayout.razor` | App shell with navigation drawer |
+| `NavMenu.razor` | Side navigation menu |
+| `StudyTable.razor` | MudTable displaying study records |
+| `FileDropZone.razor` | Drag-and-drop file upload area |
+| `ConnectionStatus.razor` | PACS connection indicator |
+| `ProgressPanel.razor` | Download/processing progress display |
+
+### 8.3 MudBlazor Setup
+
+The app uses MudBlazor for UI components. Required setup in `MauiProgram.cs`:
+
+```csharp
+builder.Services.AddMudServices(config =>
+{
+    config.SnackbarConfiguration.PositionClass = Defaults.Classes.Position.BottomRight;
+});
+```
+
+In `wwwroot/index.html`, include MudBlazor CSS and JS:
+
+```html
+<link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+<script src="_content/MudBlazor/MudBlazor.min.js"></script>
+```
+
+---
+
+## 9. Development Environment
+
+### 9.1 Prerequisites
+
+- macOS (Apple Silicon M3 Pro)
+- .NET 9 SDK
+- MAUI workload installed (`dotnet workload install maui`)
+- Visual Studio Code with C# Dev Kit extension
+- Orthanc PACS server (for testing)
+
+### 9.2 Orthanc Setup for Development
+
+Orthanc should be running locally with default configuration:
+
+```
+Host: 127.0.0.1
+DICOM Port: 4242
+AE Title: ORTHANC
+Web UI: http://localhost:8042
+```
+
+To allow the app to receive C-GET responses, add to Orthanc's `orthanc.json`:
+
+```json
+{
+  "DicomModalities": {
+    "DICOM_OPEN_QR": ["DICOM_OPEN_QR", "127.0.0.1", 11112]
+  }
+}
+```
+
+## 10. Testing Requirements
+
+### 10.1 Unit Tests
+
+| Component | Test Cases |
+|-----------|------------|
+| `AnonymizationService` | Verify PHI tags are removed/replaced correctly |
+| `ExcelReaderService` | Parse valid Excel, handle missing columns, handle empty rows |
+| Domain Entities | Entity creation, validation |
+
+### 10.2 Integration Tests
+
+| Scenario | Description |
+|----------|-------------|
+| C-FIND Query | Query Orthanc with known AN, verify response |
+| C-GET Retrieve | Download study from Orthanc, verify files received |
+| End-to-End | Upload Excel → Query → Download → Anonymize → Export |
+
+### 10.3 Test Data
+
+Use Orthanc's sample DICOM files or generate synthetic data:
+
+```zsh
+# Upload sample DICOM to Orthanc via REST API
+curl -X POST http://localhost:8042/instances \
+  -H "Content-Type: application/dicom" \
+  --data-binary @sample.dcm
+```
+
+---
+
+## 11. Error Handling
+
+### 11.1 Error Categories
+
+| Category | Example | User Message |
+|----------|---------|--------------|
+| Network | PACS unreachable | "Cannot connect to PACS server. Please check your network and settings." |
+| DICOM | Association rejected | "PACS rejected the connection. Please verify AE Title configuration." |
+| File | Excel parse error | "Cannot read the Excel file. Please ensure it's a valid .xlsx file." |
+| Validation | No AN column | "Column 'AN' not found in the Excel file. Please select the correct column." |
+
+### 11.2 Logging
+
+Use structured logging with severity levels:
+
+```csharp
+_logger.LogInformation("Querying PACS for AN: {AccessionNumber}", an);
+_logger.LogWarning("Study not found for AN: {AccessionNumber}", an);
+_logger.LogError(ex, "Failed to retrieve study: {StudyUid}", uid);
+```
+
+---
+
+## 12. Configuration Schema
+
+### 12.1 AppConfiguration
+
+```csharp
+public class AppConfiguration
+{
+    public PacsSettings Pacs { get; set; } = new();
+    public LocalSettings Local { get; set; } = new();
+    public OutputSettings Output { get; set; } = new();
+    public AnonymizationSettings Anonymization { get; set; } = new();
+}
+
+public class PacsSettings
+{
+    public string Host { get; set; } = "127.0.0.1";
+    public int Port { get; set; } = 4242;
+    public string AeTitle { get; set; } = "ORTHANC";
+    public int TimeoutSeconds { get; set; } = 30;
+}
+
+public class LocalSettings
+{
+    public string AeTitle { get; set; } = "DICOM_OPEN_QR";
+    public int Port { get; set; } = 11112;
+}
+
+public class OutputSettings
+{
+    public string BasePath { get; set; } = "";
+    public string FolderStructure { get; set; } = "{AnonymizedAN}/{SeriesNumber}";
+    public string FileNamePattern { get; set; } = "IMG{InstanceNumber:D5}.dcm";
+}
+
+public class AnonymizationSettings
+{
+    public string IdPrefix { get; set; } = "ANON";
+    public bool RemovePatientSex { get; set; } = false;
+    public bool RemoveStudyDescription { get; set; } = false;
+}
+```
+
+### 12.2 Configuration File Location
+
+```
+macOS:    ~/Library/Application Support/DicomOpenQR/config.json
+Windows:  %APPDATA%\DicomOpenQR\config.json
+```
